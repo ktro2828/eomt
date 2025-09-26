@@ -12,3 +12,5 @@ ipykernel==6.29.5
 fvcore==0.1.5.post20221221
 torchmetrics==1.7.1
 pycocotools==2.0.8
+onnx>=1.16.1
+onnxruntime==1.23.0

@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import math
+from abc import abstractmethod
+from enum import Enum
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 from torchvision.transforms.v2.functional import pad
+
+
+class Task(Enum):
+    SEMANTIC = 0
+    INSTANCE = 1
+    PANOPTIC = 2
 
 
 class InferenceBase(nn.Module):
@@ -17,6 +25,7 @@ class InferenceBase(nn.Module):
         stuff_classes: list[int] | None = None,
         mask_thresh: float = 0.8,
         overlap_thresh: float = 0.5,
+        **kwargs,
     ) -> None:
         super().__init__()
         self.network = network
@@ -26,30 +35,32 @@ class InferenceBase(nn.Module):
         self.mask_thresh = mask_thresh
         self.overlap_thresh = overlap_thresh
 
+    @classmethod
+    @abstractmethod
+    def task(cls) -> Task:
+        pass
+
     def scale_img_size_semantic(self, size: tuple[int, int]) -> list[int]:
-        factor = max(self.img_size[0] / size[0], self.img_size[1] / size[1])
-        return [round(s * factor) for s in size]
+        factor = max(self.img_size[0] / size[0], self.img_size[1] / size[1]).item()
+        return [round(s.item() * factor) for s in size]
 
     def window_imgs_semantic(self, imgs: torch.Tensor) -> torch.Tensor:
+        new_h, new_w = self.scale_img_size_semantic(imgs.shape[-2:])
+        resized_imgs = F.interpolate(imgs, size=(new_h, new_w), mode="bilinear")
+
+        num_crops = math.ceil(max(resized_imgs.shape[-2:]) / min(self.img_size))
+        overlap = num_crops * min(self.img_size) - max(resized_imgs.shape[-2:])
+        overlap_per_crop = (overlap / (num_crops - 1)) if overlap > 0 else 0
+
         crops, origins = [], []
-
         for i in range(len(imgs)):
-            img = imgs[i]
-            new_h, new_w = self.scale_img_size_semantic(img.shape[-2:])
-            resized_img = F.interpolate(img, size=(new_h, new_w), mode="bilinear")
-
-            num_crops = math.ceil(max(resized_img.shape[-2:]) / min(self.img_size))
-            overlap = num_crops * min(self.img_size) - max(resized_img.shape[-2:])
-            overlap_per_crop = (overlap / (num_crops - 1)) if overlap > 0 else 0
-
             for j in range(num_crops):
                 start = int(j * (min(self.img_size) - overlap_per_crop))
                 end = start + min(self.img_size)
-                if resized_img.shape[-2] > resized_img.shape[-1]:
-                    crop = resized_img[:, start:end, :]
+                if resized_imgs.shape[-2] > resized_imgs.shape[-1]:
+                    crop = resized_imgs[i, :, start:end, :]
                 else:
-                    crop = resized_img[:, :, start:end]
-
+                    crop = resized_imgs[i, :, :, start:end]
                 crops.append(crop)
                 origins.append((i, start, end))
 
@@ -60,7 +71,7 @@ class InferenceBase(nn.Module):
         crop_logits: torch.Tensor,
         origins: list,
         img_sizes: list[tuple[int, int]],
-    ) -> list[torch.Tensor]:
+    ) -> torch.Tensor:
         logit_sums, logit_counts = [], []
         for size in img_sizes:
             h, w = self.scale_img_size_semantic(size)
@@ -79,10 +90,14 @@ class InferenceBase(nn.Module):
                 logit_sums[img_i][:, :, start:end] += crop_logits[crop_i]
                 logit_counts[img_i][:, :, start:end] += 1
 
-        return [
-            F.interpolate((sums / counts)[None, ...], img_sizes[i], mode="bilinear")[0]
-            for i, (sums, counts) in enumerate(zip(logit_sums, logit_counts))
-        ]
+        return torch.stack(
+            [
+                F.interpolate(
+                    (sums / counts)[None, ...], img_sizes[i], mode="bilinear"
+                )[0]
+                for i, (sums, counts) in enumerate(zip(logit_sums, logit_counts))
+            ]
+        )
 
     @staticmethod
     def to_per_pixel_logits_semantic(
@@ -95,24 +110,19 @@ class InferenceBase(nn.Module):
             class_logits.softmax(dim=1)[..., :-1],
         )
 
-    def scale_img_size_instance_panoptic(self, size: tuple[int, int]):
-        factor = min(self.img_size[0] / size[0], self.img_size[1] / size[1])
-        return [round(s * factor) for s in size]
+    def scale_img_size_instance_panoptic(self, size: tuple[int, int]) -> list[int]:
+        factor = min(self.img_size[0] / size[0], self.img_size[1] / size[1]).item()
+        return [round(s.item() * factor) for s in size]
 
     def resize_and_pad_imgs_instance_panoptic(self, imgs: torch.Tensor) -> torch.Tensor:
-        transformed_imgs = []
+        new_h, new_w = self.scale_img_size_instance_panoptic(imgs.shape[-2:])
+        resized_imgs = F.interpolate(imgs, size=(new_h, new_w), mode="bilinear")
 
-        for img in imgs:
-            new_h, new_w = self.scale_img_size_instance_panoptic(img.shape[-2:])
-            resized_img = F.interpolate(img, size=(new_h, new_w), mode="bilinear")
+        pad_h = max(0, self.img_size[-2] - resized_imgs.shape[-2])
+        pad_w = max(0, self.img_size[-1] - resized_imgs.shape[-1])
+        padded_img = pad(resized_imgs, (0, pad_w, 0, pad_h))
 
-            pad_h = max(0, self.img_size[-2] - resized_img.shape[-2])
-            pad_w = max(0, self.img_size[-1] - resized_img.shape[-1])
-            padded_img = pad(resized_img, (0, pad_w, 0, pad_h))
-
-            transformed_imgs.append(padded_img)
-
-        return torch.stack(transformed_imgs)
+        return padded_img
 
     def revert_resize_and_pad_logits_instance_panoptic(
         self,

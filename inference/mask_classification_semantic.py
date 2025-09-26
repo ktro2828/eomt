@@ -4,7 +4,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .base import InferenceBase
+from .base import InferenceBase, Task
 
 
 class MaskClassificationSemantic(InferenceBase):
@@ -13,14 +13,24 @@ class MaskClassificationSemantic(InferenceBase):
         network: nn.Module,
         img_size: tuple[int, int],
         num_classes: int,
+        **kwargs,
     ) -> None:
-        super().__init__(network=network, img_size=img_size, num_classes=num_classes)
+        super().__init__(
+            network=network,
+            img_size=img_size,
+            num_classes=num_classes,
+            **kwargs,
+        )
+
+    @classmethod
+    def task(cls) -> Task:
+        return Task.SEMANTIC
 
     def forward(self, imgs: torch.Tensor) -> torch.Tensor:
         img_sizes = [img.shape[-2:] for img in imgs]
         crops, origins = self.window_imgs_semantic(imgs)
-
-        mask_logits_per_layer, class_logits_per_layer = self.network(crops)
+        x = crops / 255.0
+        mask_logits_per_layer, class_logits_per_layer = self.network(x)
         mask_logits = F.interpolate(
             mask_logits_per_layer[-1], size=self.img_size, mode="bilinear"
         )
@@ -29,4 +39,4 @@ class MaskClassificationSemantic(InferenceBase):
             mask_logits, class_logits_per_layer[-1]
         )
         logits = self.revert_window_logits_semantic(crop_logits, origins, img_sizes)
-        return logits.argmax(dim=1)
+        return logits.argmax(dim=1, keepdim=True)

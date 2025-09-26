@@ -52,9 +52,6 @@ class MaskClassificationPanoptic(InferenceBase):
             self.overlap_thresh,
         )  # [1, H, W, 2]
 
-        semantic_preds, instance_preds = (
-            preds[..., 0].unsqueeze(0),
-            preds[..., 1].unsqueeze(0),
-        )  # [1, 1, H, W] and [1, 1, H, W]
+        instance_preds = preds[..., 1].unsqueeze(0)  # [1, 1, H, W]
 
-        return semantic_preds, instance_preds
+        return instance_preds
