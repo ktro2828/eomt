@@ -127,7 +127,7 @@ def main() -> None:
         case Task.SEMANTIC:
             output_names = ["mask"]
         case Task.INSTANCE:
-            output_names = ["mask"]
+            output_names = ["boxes", "labels", "mask"]
         case Task.PANOPTIC:
             output_names = ["semantic", "instance"]
         case _:

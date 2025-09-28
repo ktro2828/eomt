@@ -22,6 +22,7 @@ class InferenceBase(nn.Module):
         network: nn.Module,
         img_size: tuple[int, int],
         num_classes: int,
+        eval_topk_instances: int = 100,
         stuff_classes: list[int] | None = None,
         mask_thresh: float = 0.8,
         overlap_thresh: float = 0.5,
@@ -31,6 +32,7 @@ class InferenceBase(nn.Module):
         self.network = network
         self.img_size = img_size
         self.num_classes = num_classes
+        self.eval_topk_instances = eval_topk_instances
         self.stuff_classes = stuff_classes
         self.mask_thresh = mask_thresh
         self.overlap_thresh = overlap_thresh
